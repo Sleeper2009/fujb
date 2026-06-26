@@ -1,13 +1,4 @@
 // LEDBreathe — tweak cho TrollLEDs / Quad-LED iPhone (rootless, Dopamine)
-//
-// Ý tưởng:
-//   - Inject vào mediaserverd, vì đó là process duy nhất giữ được instance
-//     BWFigCaptureDeviceVendor / BWFigCaptureDevice để gọi SetTorchManualParameters.
-//   - Dùng 1 NSTimer chạy ở ~30fps, mỗi tick tính lại 4 giá trị LED
-//     (Cool0, Cool1, Warm0, Warm1) theo công thức sin-wave lệch pha,
-//     để tạo hiệu ứng "thở" (breathing) đồng thời crossfade trắng <-> vàng,
-//     không bao giờ chạm đáy 0% hay đỉnh 100% tuyệt đối -> không có cảm giác
-//     "bật/tắt" cứng mà luôn mượt.
 
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
@@ -19,7 +10,7 @@
 #define BREATH_PERIOD_SEC 4.0
 #define COLOR_PERIOD_SEC 6.5
 #define UPDATE_FPS 30.0
-#define AUTO_OFF_SECONDS (15 * 60.0)
+#define AUTO_OFF_SECONDS (15 * 60)
 
 @interface BWFigCaptureDeviceVendor : NSObject
 + (instancetype)sharedVendor;
