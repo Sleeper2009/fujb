@@ -3,7 +3,7 @@ Name: LEDBreathe
 Version: 1.0.0
 Architecture: iphoneos-arm64
 Description: Breathing/crossfade LED effect tweak (rootless, Dopamine)
-Maintainer: You
-Author: You
+Maintainer: You <you@example.com>
+Author: You <you@example.com>
 Section: Tweaks
-Depends: firmware (>= 16.0)
+Depends: firmware (>= 16.0), preferenceloader
