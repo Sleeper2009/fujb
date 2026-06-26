@@ -23,20 +23,18 @@ jobs:
         env:
           THEOS: ${{ github.workspace }}/theos
         run: |
+          sudo apt-get install -y libtinfo6 || sudo apt-get install -y libtinfo5 || true
+
           git clone --recursive https://github.com/theos/theos.git "$THEOS"
+
           mkdir -p "$THEOS/sdks"
           curl -LO https://github.com/theos/sdks/archive/master.zip
           unzip -q master.zip
           mv sdks-master/*.sdk "$THEOS/sdks/"
           rm -rf master.zip sdks-master
 
-          curl -L https://github.com/theos/linux-tools/releases/latest/download/linux-x86_64.tar.xz -o toolchain.tar.xz
-          mkdir -p "$THEOS/toolchain/linux/iphone/bin"
-          tar -xf toolchain.tar.xz -C "$THEOS/toolchain/linux/iphone/bin"
-          rm toolchain.tar.xz
-
-          curl -L https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 -o "$THEOS/bin/ldid"
-          chmod +x "$THEOS/bin/ldid"
+          mkdir -p "$THEOS/toolchain/"
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz | tar -xJf - -C "$THEOS/toolchain/"
 
       - name: Build package
         env:
