@@ -82,7 +82,7 @@ static void ApplyBreatheFrame(void) {
                                           amber1:amber1
                                           amber2:amber2];
     if (!ok) {
-        NSLog(@"[LEDBreathe] setTorchManualParameters thất bại (app khác đang giữ quyền điều khiển LED?)");
+        NSLog(@"[LEDBreathe] setTorchManualParameters thất bại");
     }
 }
 
@@ -109,7 +109,7 @@ static void StartBreathing(void) {
     }
     BWFigCaptureDevice *device = GetTorchDevice();
     if (!device) {
-        NSLog(@"[LEDBreathe] Không lấy được torch device, không thể bắt đầu.");
+        NSLog(@"[LEDBreathe] Không lấy được torch device.");
         return;
     }
     gStartTime = CFAbsoluteTimeGetCurrent();
@@ -149,6 +149,33 @@ static void DarwinNotifyCallback(CFNotificationCenterRef center,
     }
 }
 
+static void ApplySettingsState(void) {
+    CFPreferencesAppSynchronize(CFSTR("com.yourname.ledbreathe"));
+
+    Boolean keyExists = false;
+    Boolean enabled = CFPreferencesGetAppBooleanValue(
+        CFSTR("enabled"),
+        CFSTR("com.yourname.ledbreathe"),
+        &keyExists
+    );
+
+    if (keyExists && enabled) {
+        NSLog(@"[LEDBreathe] Toggle Settings = ON -> bắt đầu animation.");
+        StartBreathing();
+    } else {
+        NSLog(@"[LEDBreathe] Toggle Settings = OFF -> dừng animation.");
+        StopBreathing();
+    }
+}
+
+static void SettingsChangedCallback(CFNotificationCenterRef center,
+                                     void *observer,
+                                     CFStringRef name,
+                                     const void *object,
+                                     CFDictionaryRef userInfo) {
+    ApplySettingsState();
+}
+
 %ctor {
     NSString *processName = [[NSProcessInfo processInfo] processName];
     if (![processName isEqualToString:@"mediaserverd"]) {
@@ -174,4 +201,15 @@ static void DarwinNotifyCallback(CFNotificationCenterRef center,
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
+
+    CFNotificationCenterAddObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        NULL,
+        SettingsChangedCallback,
+        CFSTR("com.yourname.ledbreathe/preferenceschanged"),
+        NULL,
+        CFNotificationSuspensionBehaviorDeliverImmediately
+    );
+
+    ApplySettingsState();
 }
