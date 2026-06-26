@@ -14,16 +14,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential fakeroot rsync curl git perl
+
       - name: Install Theos
-        uses: Randomblock1/theos-action@v1
-        with:
-          theos-dir: theos
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          mkdir -p "$THEOS/sdks"
+          curl -LO https://github.com/theos/sdks/archive/master.zip
+          unzip -q master.zip
+          mv sdks-master/*.sdk "$THEOS/sdks/"
+          rm -rf master.zip sdks-master
+
+          curl -L https://github.com/theos/linux-tools/releases/latest/download/linux-x86_64.tar.xz -o toolchain.tar.xz
+          mkdir -p "$THEOS/toolchain/linux/iphone/bin"
+          tar -xf toolchain.tar.xz -C "$THEOS/toolchain/linux/iphone/bin"
+          rm toolchain.tar.xz
+
+          curl -L https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 -o "$THEOS/bin/ldid"
+          chmod +x "$THEOS/bin/ldid"
 
       - name: Build package
         env:
           THEOS: ${{ github.workspace }}/theos
         run: |
-          export PATH="$THEOS/bin:$PATH"
+          export PATH="$THEOS/bin:$THEOS/toolchain/linux/iphone/bin:$PATH"
           make package FINALPACKAGE=1
 
       - name: Find built .deb
