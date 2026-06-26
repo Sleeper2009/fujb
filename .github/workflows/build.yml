@@ -1,0 +1,41 @@
+name: Build LEDBreathe tweak
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build .deb
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+        with:
+          theos-dir: theos
+
+      - name: Build package
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
+          export PATH="$THEOS/bin:$PATH"
+          make package FINALPACKAGE=1
+
+      - name: Find built .deb
+        id: find_deb
+        run: |
+          DEB_PATH=$(find packages -name "*.deb" | head -n1)
+          echo "deb_path=$DEB_PATH" >> "$GITHUB_OUTPUT"
+          echo "Đã build xong: $DEB_PATH"
+
+      - name: Upload .deb as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEDBreathe-deb
+          path: ${{ steps.find_deb.outputs.deb_path }}
+          if-no-files-found: error
