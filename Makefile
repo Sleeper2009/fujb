@@ -17,3 +17,4 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 
 after-install::
 	install.exec "sbreload"
+	install.exec "killall -9 SpringBoard"
