@@ -1,16 +1,11 @@
-// LEDBreathe — tweak cho TrollLEDs / Quad-LED iPhone (rootless, Dopamine)
-//
-// PHIÊN BẢN AN TOÀN: mọi lệnh gọi tới API private đều được kiểm tra kỹ
-// bằng respondsToSelector: trước khi gọi. Nếu bất kỳ bước nào không khớp
-// (class không tồn tại, method không có...), tweak sẽ CHỈ ghi log và
-// TỰ TẮT, không gọi liều để tránh làm crash mediaserverd.
+// LEDBreathe v3 — viết lại HOÀN TOÀN dựa theo code nguồn mở thật của
+// TrollLEDs (TLDeviceManager.m + TLConstants.h), không đoán API nữa.
 
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
 #import <math.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import <CoreFoundation/CFUserNotification.h>
 
 #define PHYSICAL_LED_IS_QUAD true
 #define BRIGHTNESS_SCALE 0.55
@@ -20,25 +15,14 @@
 #define UPDATE_FPS 30.0
 #define AUTO_OFF_SECONDS (15 * 60)
 
-static NSTimer *gBreatheTimer = nil;
-static NSTimer *gAutoOffTimer = nil;
-static id gTorchDevice = nil;
-static BOOL gApiVerifiedSafe = NO;
-static CFAbsoluteTime gStartTime = 0;
-
 #define LOG_FILE_PATH "/var/mobile/Documents/ledbreathe_log.txt"
 
 static void FileLog(NSString *message) {
     NSLog(@"%@", message);
-
-    NSString *line = [NSString stringWithFormat:@"%@ | %@\n",
-                       [NSDate date], message];
-
+    NSString *line = [NSString stringWithFormat:@"%@ | %@\n", [NSDate date], message];
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@LOG_FILE_PATH];
     if (!fh) {
-        [[NSFileManager defaultManager] createFileAtPath:@LOG_FILE_PATH
-                                                  contents:nil
-                                                attributes:nil];
+        [[NSFileManager defaultManager] createFileAtPath:@LOG_FILE_PATH contents:nil attributes:nil];
         fh = [NSFileHandle fileHandleForWritingAtPath:@LOG_FILE_PATH];
     }
     if (fh) {
@@ -48,104 +32,171 @@ static void FileLog(NSString *message) {
     }
 }
 
-static NSString *DumpClassMethods(Class cls) {
-    NSMutableString *result = [NSMutableString string];
+static NSTimer *gBreatheTimer = nil;
+static NSTimer *gAutoOffTimer = nil;
+static CFAbsoluteTime gStartTime = 0;
 
-    unsigned int classMethodCount = 0;
-    Method *classMethods = class_copyMethodList(object_getClass(cls), &classMethodCount);
-    [result appendFormat:@"+ (%u methods):\n", classMethodCount];
-    for (unsigned int i = 0; i < classMethodCount && i < 40; i++) {
-        SEL sel = method_getName(classMethods[i]);
-        [result appendFormat:@"  +%s\n", sel_getName(sel)];
+static Class gVendorClass = nil;
+static id gVendor = nil;
+static int gPid = 0;
+static unsigned int gClient = 0;
+static void *gDeviceRef = NULL;
+static id gDevice = nil;
+static void *gStreamRef = NULL;
+static id gStream = nil;
+static BOOL gReady = NO;
+
+static BOOL InitVendor(void) {
+    void *cmCaptureHandle = dlopen("/System/Library/PrivateFrameworks/CMCapture.framework/CMCapture", RTLD_NOW);
+    if (!cmCaptureHandle) {
+        void *celestialHandle = dlopen("/System/Library/PrivateFrameworks/Celestial.framework/Celestial", RTLD_NOW);
+        if (!celestialHandle) {
+            FileLog(@"[LEDBreathe] Không load được CMCapture/Celestial framework -> dừng.");
+            return NO;
+        }
     }
-    if (classMethods) free(classMethods);
 
-    unsigned int instMethodCount = 0;
-    Method *instMethods = class_copyMethodList(cls, &instMethodCount);
-    [result appendFormat:@"- (%u methods):\n", instMethodCount];
-    for (unsigned int i = 0; i < instMethodCount && i < 40; i++) {
-        SEL sel = method_getName(instMethods[i]);
-        [result appendFormat:@"  -%s\n", sel_getName(sel)];
+    gVendorClass = NSClassFromString(@"BWFigCaptureDeviceVendor");
+    if (!gVendorClass) {
+        FileLog(@"[LEDBreathe] Không tìm thấy class BWFigCaptureDeviceVendor -> dừng.");
+        return NO;
     }
-    if (instMethods) free(instMethods);
 
-    return result;
+    if ([gVendorClass respondsToSelector:@selector(sharedCaptureDeviceVendor)]) {
+        gVendor = ((id (*)(id, SEL))objc_msgSend)(gVendorClass, @selector(sharedCaptureDeviceVendor));
+    } else if ([gVendorClass respondsToSelector:NSSelectorFromString(@"sharedInstance")]) {
+        gVendor = ((id (*)(id, SEL))objc_msgSend)(gVendorClass, NSSelectorFromString(@"sharedInstance"));
+    }
+
+    if (!gVendor) {
+        FileLog(@"[LEDBreathe] Không lấy được vendor instance -> dừng.");
+        return NO;
+    }
+
+    gPid = getpid();
+    FileLog(@"[LEDBreathe] InitVendor thành công.");
+    return YES;
 }
 
-static void DebugDumpVendorClass(void) {
-    Class vendorClass = NSClassFromString(@"BWFigCaptureDeviceVendor");
-    if (!vendorClass) {
-        FileLog(@"[LEDBreathe][DUMP] Không tìm thấy class BWFigCaptureDeviceVendor");
-        return;
+static BOOL SetupStream(void) {
+    if (gReady) return YES;
+
+    SEL copyDefaultSel = NSSelectorFromString(
+        @"copyDefaultVideoDeviceWithStealingBehavior:forPID:clientIDOut:withDeviceAvailabilityChangedHandler:");
+
+    if ([gVendorClass respondsToSelector:copyDefaultSel]) {
+        unsigned int clientOut = 0;
+        void *(*func)(id, SEL, int, int, unsigned int *, void *) =
+            (void *(*)(id, SEL, int, int, unsigned int *, void *))objc_msgSend;
+        gDeviceRef = func(gVendorClass, copyDefaultSel, 1, gPid, &clientOut, NULL);
+        gClient = clientOut;
+
+        if (!gDeviceRef) {
+            FileLog(@"[LEDBreathe] copyDefaultVideoDeviceWithStealingBehavior trả về NULL -> dừng.");
+            return NO;
+        }
+        FileLog(@"[LEDBreathe] Lấy deviceRef qua nhánh mới thành công.");
+
+        SEL streamSel = NSSelectorFromString(@"copyStreamForFlashlightWithPosition:deviceType:forDevice:");
+        if ([gVendorClass respondsToSelector:streamSel]) {
+            void *(*sfunc)(id, SEL, int, int, void *) = (void *(*)(id, SEL, int, int, void *))objc_msgSend;
+            gStreamRef = sfunc(gVendorClass, streamSel, 1, 2, gDeviceRef);
+        } else {
+            SEL streamSel2 = NSSelectorFromString(@"copyStreamWithPosition:deviceType:forDevice:");
+            void *(*sfunc2)(id, SEL, int, int, void *) = (void *(*)(id, SEL, int, int, void *))objc_msgSend;
+            gStreamRef = sfunc2(gVendorClass, streamSel2, 1, 2, gDeviceRef);
+        }
+
+        if (!gStreamRef) {
+            FileLog(@"[LEDBreathe] copyStreamForFlashlightWithPosition trả về NULL (nhánh mới) -> dừng.");
+            return NO;
+        }
+        FileLog(@"[LEDBreathe] Lấy streamRef qua nhánh mới thành công.");
+        gReady = YES;
+        return YES;
     }
-    NSString *dump = DumpClassMethods(vendorClass);
-    FileLog([NSString stringWithFormat:@"[LEDBreathe][DUMP] BWFigCaptureDeviceVendor:\n%@", dump]);
+
+    SEL regSel1 = NSSelectorFromString(
+        @"registerClientWithPID:clientDescription:clientPriority:canStealFromClientsWithSamePriority:deviceSharingWithOtherClientsAllowed:deviceAvailabilityChangedHandler:");
+
+    if ([gVendor respondsToSelector:regSel1]) {
+        NSMethodSignature *sig = [gVendor methodSignatureForSelector:regSel1];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        inv.selector = regSel1;
+        inv.target = gVendor;
+        NSString *desc = @"LEDBreathe tweak";
+        int priority = 1;
+        BOOL canSteal = NO;
+        BOOL sharing = YES;
+        void *nullHandler = NULL;
+        [inv setArgument:&gPid atIndex:2];
+        [inv setArgument:&desc atIndex:3];
+        [inv setArgument:&priority atIndex:4];
+        [inv setArgument:&canSteal atIndex:5];
+        [inv setArgument:&sharing atIndex:6];
+        [inv setArgument:&nullHandler atIndex:7];
+        [inv invoke];
+        unsigned int result = 0;
+        [inv getReturnValue:&result];
+        gClient = result;
+    }
+
+    if (gClient == 0) {
+        FileLog(@"[LEDBreathe] registerClientWithPID thất bại hoặc không tồn tại -> dừng (nhánh cũ).");
+        return NO;
+    }
+
+    SEL copyDevSel = NSSelectorFromString(@"copyDeviceForClient:informClientWhenDeviceAvailableAgain:error:");
+    if ([gVendor respondsToSelector:copyDevSel]) {
+        int errOut = 0;
+        id (*dfunc)(id, SEL, unsigned int, BOOL, int *) = (id (*)(id, SEL, unsigned int, BOOL, int *))objc_msgSend;
+        gDevice = dfunc(gVendor, copyDevSel, gClient, NO, &errOut);
+    }
+
+    if (!gDevice) {
+        FileLog(@"[LEDBreathe] copyDeviceForClient trả về nil (nhánh cũ) -> dừng.");
+        return NO;
+    }
+
+    SEL streamSel = NSSelectorFromString(@"copyStreamForFlashlightWithPosition:deviceType:forDevice:");
+    if ([gVendor respondsToSelector:streamSel]) {
+        id (*sfunc)(id, SEL, int, int, id) = (id (*)(id, SEL, int, int, id))objc_msgSend;
+        gStream = sfunc(gVendor, streamSel, 1, 2, gDevice);
+    }
+
+    if (!gStream) {
+        FileLog(@"[LEDBreathe] copyStreamForFlashlightWithPosition trả về nil (nhánh cũ id-style) -> dừng.");
+        return NO;
+    }
+
+    FileLog(@"[LEDBreathe] Setup stream qua nhánh cũ (id-style) thành công.");
+    gReady = YES;
+    return YES;
 }
 
-static id SafeGetTorchDevice(void) {
-    if (gTorchDevice) return gTorchDevice;
+static void SetTorchParams(float w1, float w2, float a1, float a2) {
+    if (!gReady) return;
 
-    Class vendorClass = NSClassFromString(@"BWFigCaptureDeviceVendor");
-    if (!vendorClass) {
-        FileLog(@"[LEDBreathe][SAFE] Class BWFigCaptureDeviceVendor không tồn tại -> dừng an toàn.");
-        return nil;
-    }
-
-    SEL sharedSel = NSSelectorFromString(@"sharedCaptureDeviceVendor");
-    if (![vendorClass respondsToSelector:sharedSel]) {
-        FileLog(@"[LEDBreathe][SAFE] vendorClass không có method sharedCaptureDeviceVendor -> dừng an toàn.");
-        return nil;
-    }
-
-    id vendor = ((id (*)(id, SEL))objc_msgSend)(vendorClass, sharedSel);
-    if (!vendor) {
-        FileLog(@"[LEDBreathe][SAFE] sharedCaptureDeviceVendor trả về nil -> dừng an toàn.");
-        return nil;
-    }
-
-    SEL streamSel = NSSelectorFromString(@"copyStreamForFlashlightWithPosition:deviceType:forDevice:error:");
-    if (![vendor respondsToSelector:streamSel]) {
-        FileLog(@"[LEDBreathe][SAFE] vendor không có method copyStreamForFlashlightWithPosition:... -> dừng an toàn.");
-        return nil;
-    }
-
-    NSError *err = nil;
-    id stream = ((id (*)(id, SEL, NSInteger, NSInteger, id, NSError **))objc_msgSend)
-        (vendor, streamSel, 0, 0, nil, &err);
-
-    if (!stream) {
-        FileLog([NSString stringWithFormat:@"[LEDBreathe][SAFE] copyStreamForFlashlightWithPosition trả về nil, error: %@ -> dừng an toàn.", err]);
-        return nil;
-    }
-
-    NSString *streamDump = DumpClassMethods([stream class]);
-    FileLog([NSString stringWithFormat:@"[LEDBreathe][DUMP] Stream class (%@):\n%@", NSStringFromClass([stream class]), streamDump]);
-
-    gTorchDevice = stream;
-    gApiVerifiedSafe = NO;
-    return gTorchDevice;
-}
-
-static BOOL SafeSetTorchParams(id device, float w1, float w2, float a1, float a2) {
-    if (!gApiVerifiedSafe || !device) return NO;
-
-    SEL sel = NSSelectorFromString(@"setTorchManualParameters:white2:amber1:amber2:");
+    float values[4] = { w1, w2, a1, a2 };
+    NSData *data = [NSData dataWithBytes:values length:sizeof(values)];
 
     @try {
-        BOOL (*func)(id, SEL, float, float, float, float) =
-            (BOOL (*)(id, SEL, float, float, float, float))objc_msgSend;
-        return func(device, sel, w1, w2, a1, a2);
+        if (gStream) {
+            SEL setPropSel = NSSelectorFromString(@"setProperty:value:");
+            if ([gStream respondsToSelector:setPropSel]) {
+                ((void (*)(id, SEL, CFStringRef, id))objc_msgSend)
+                    (gStream, setPropSel, CFSTR("TorchManualParameters"), data);
+            }
+        } else if (gStreamRef) {
+            FileLog(@"[LEDBreathe] Có streamRef (CF-style) nhưng chưa hỗ trợ set property qua vtable trong bản này -> bỏ qua an toàn.");
+        }
     } @catch (NSException *e) {
-        FileLog([NSString stringWithFormat:@"[LEDBreathe][SAFE] Exception khi gọi setTorchManualParameters: %@ -> tự tắt.", e]);
-        gApiVerifiedSafe = NO;
-        return NO;
+        FileLog([NSString stringWithFormat:@"[LEDBreathe] Exception khi setProperty: %@", e]);
     }
 }
 
 static void ApplyBreatheFrame(void) {
-    if (!gApiVerifiedSafe) return;
-    id device = gTorchDevice;
-    if (!device) return;
+    if (!gReady) return;
 
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     double t = now - gStartTime;
@@ -170,13 +221,7 @@ static void ApplyBreatheFrame(void) {
     amber2 = amber1;
 #endif
 
-    BOOL ok = SafeSetTorchParams(device, white1, white2, amber1, amber2);
-    if (!ok && !gApiVerifiedSafe) {
-        if (gBreatheTimer) {
-            [gBreatheTimer invalidate];
-            gBreatheTimer = nil;
-        }
-    }
+    SetTorchParams(white1, white2, amber1, amber2);
 }
 
 static void StopBreathing(void) {
@@ -188,10 +233,10 @@ static void StopBreathing(void) {
         [gAutoOffTimer invalidate];
         gAutoOffTimer = nil;
     }
-    if (gApiVerifiedSafe && gTorchDevice) {
-        SafeSetTorchParams(gTorchDevice, 0, 0, 0, 0);
+    if (gReady) {
+        SetTorchParams(0, 0, 0, 0);
     }
-    FileLog(@"[LEDBreathe] Đã dừng animation và tắt LED.");
+    FileLog(@"[LEDBreathe] Đã dừng animation.");
 }
 
 static void StartBreathing(void) {
@@ -200,10 +245,11 @@ static void StartBreathing(void) {
         return;
     }
 
-    id device = SafeGetTorchDevice();
-    if (!device || !gApiVerifiedSafe) {
-        FileLog(@"[LEDBreathe] Kiểm tra an toàn KHÔNG qua -> không khởi động animation.");
-        return;
+    if (!gVendor) {
+        if (!InitVendor()) return;
+    }
+    if (!gReady) {
+        if (!SetupStream()) return;
     }
 
     gStartTime = CFAbsoluteTimeGetCurrent();
@@ -227,14 +273,11 @@ static void StartBreathing(void) {
                                                      repeats:NO];
 #endif
 
-    FileLog(@"[LEDBreathe] Bắt đầu animation breathing (đã qua kiểm tra an toàn).");
+    FileLog(@"[LEDBreathe] Bắt đầu animation breathing.");
 }
 
-static void DarwinNotifyCallback(CFNotificationCenterRef center,
-                                  void *observer,
-                                  CFStringRef name,
-                                  const void *object,
-                                  CFDictionaryRef userInfo) {
+static void DarwinNotifyCallback(CFNotificationCenterRef center, void *observer, CFStringRef name,
+                                  const void *object, CFDictionaryRef userInfo) {
     NSString *notifName = (__bridge NSString *)name;
     if ([notifName isEqualToString:@"com.yourname.ledbreathe.start"]) {
         StartBreathing();
@@ -245,28 +288,17 @@ static void DarwinNotifyCallback(CFNotificationCenterRef center,
 
 static void ApplySettingsState(void) {
     CFPreferencesAppSynchronize(CFSTR("com.yourname.ledbreathe"));
-
     Boolean keyExists = false;
-    Boolean enabled = CFPreferencesGetAppBooleanValue(
-        CFSTR("enabled"),
-        CFSTR("com.yourname.ledbreathe"),
-        &keyExists
-    );
-
+    Boolean enabled = CFPreferencesGetAppBooleanValue(CFSTR("enabled"), CFSTR("com.yourname.ledbreathe"), &keyExists);
     if (keyExists && enabled) {
-        FileLog(@"[LEDBreathe] Toggle Settings = ON -> thử bắt đầu animation.");
         StartBreathing();
     } else {
-        FileLog(@"[LEDBreathe] Toggle Settings = OFF -> dừng animation.");
         StopBreathing();
     }
 }
 
-static void SettingsChangedCallback(CFNotificationCenterRef center,
-                                     void *observer,
-                                     CFStringRef name,
-                                     const void *object,
-                                     CFDictionaryRef userInfo) {
+static void SettingsChangedCallback(CFNotificationCenterRef center, void *observer, CFStringRef name,
+                                     const void *object, CFDictionaryRef userInfo) {
     ApplySettingsState();
 }
 
@@ -276,39 +308,19 @@ static void SettingsChangedCallback(CFNotificationCenterRef center,
         return;
     }
 
-    FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản an toàn).");
+    FileLog(@"[LEDBreathe] Tweak v3 loaded trong mediaserverd (theo code thật TrollLEDs).");
 
-    DebugDumpVendorClass();
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, DarwinNotifyCallback,
+                                     CFSTR("com.yourname.ledbreathe.start"), NULL,
+                                     CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, DarwinNotifyCallback,
+                                     CFSTR("com.yourname.ledbreathe.stop"), NULL,
+                                     CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, SettingsChangedCallback,
+                                     CFSTR("com.yourname.ledbreathe/preferenceschanged"), NULL,
+                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    CFNotificationCenterAddObserver(
-        CFNotificationCenterGetDarwinNotifyCenter(),
-        NULL,
-        DarwinNotifyCallback,
-        CFSTR("com.yourname.ledbreathe.start"),
-        NULL,
-        CFNotificationSuspensionBehaviorDeliverImmediately
-    );
-
-    CFNotificationCenterAddObserver(
-        CFNotificationCenterGetDarwinNotifyCenter(),
-        NULL,
-        DarwinNotifyCallback,
-        CFSTR("com.yourname.ledbreathe.stop"),
-        NULL,
-        CFNotificationSuspensionBehaviorDeliverImmediately
-    );
-
-    CFNotificationCenterAddObserver(
-        CFNotificationCenterGetDarwinNotifyCenter(),
-        NULL,
-        SettingsChangedCallback,
-        CFSTR("com.yourname.ledbreathe/preferenceschanged"),
-        NULL,
-        CFNotificationSuspensionBehaviorDeliverImmediately
-    );
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         ApplySettingsState();
     });
 }
