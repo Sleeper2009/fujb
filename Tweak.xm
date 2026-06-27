@@ -1,7 +1,9 @@
 // LEDBreathe — tweak cho TrollLEDs / Quad-LED iPhone (rootless, Dopamine)
 //
-// PHIÊN BẢN DEBUG: dump toàn bộ method thật của class private để tìm
-// đúng tên method, vì "sharedVendor" mình đoán ban đầu không đúng.
+// PHIÊN BẢN AN TOÀN: mọi lệnh gọi tới API private đều được kiểm tra kỹ
+// bằng respondsToSelector: trước khi gọi. Nếu bất kỳ bước nào không khớp
+// (class không tồn tại, method không có...), tweak sẽ CHỈ ghi log và
+// TỰ TẮT, không gọi liều để tránh làm crash mediaserverd.
 
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
@@ -26,26 +28,6 @@ static CFAbsoluteTime gStartTime = 0;
 
 #define LOG_FILE_PATH "/tmp/ledbreathe_log.txt"
 
-static void ShowAlert(NSString *title, NSString *message) {
-    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(
-        kCFAllocatorDefault, 0,
-        &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks);
-
-    CFDictionarySetValue(dict, kCFUserNotificationAlertHeaderKey, (CFStringRef)title);
-    CFDictionarySetValue(dict, kCFUserNotificationAlertMessageKey, (CFStringRef)message);
-    CFDictionarySetValue(dict, kCFUserNotificationDefaultButtonTitleKey, (CFStringRef)@"OK");
-
-    SInt32 error = 0;
-    CFUserNotificationRef notif = CFUserNotificationCreate(
-        kCFAllocatorDefault, 10.0, kCFUserNotificationPlainAlertLevel, &error, dict);
-
-    CFRelease(dict);
-    if (notif) {
-        CFRelease(notif);
-    }
-}
-
 static void FileLog(NSString *message) {
     NSLog(@"%@", message);
 
@@ -64,8 +46,6 @@ static void FileLog(NSString *message) {
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
-
-    ShowAlert(@"LEDBreathe Log", message);
 }
 
 static NSString *DumpClassMethods(Class cls) {
@@ -111,38 +91,38 @@ static id SafeGetTorchDevice(void) {
         return nil;
     }
 
-    if (![vendorClass respondsToSelector:@selector(sharedVendor)]) {
-        FileLog(@"[LEDBreathe][SAFE] vendorClass không có method sharedVendor -> dừng an toàn.");
+    SEL sharedSel = NSSelectorFromString(@"sharedCaptureDeviceVendor");
+    if (![vendorClass respondsToSelector:sharedSel]) {
+        FileLog(@"[LEDBreathe][SAFE] vendorClass không có method sharedCaptureDeviceVendor -> dừng an toàn.");
         return nil;
     }
 
-    id vendor = ((id (*)(id, SEL))objc_msgSend)(vendorClass, @selector(sharedVendor));
+    id vendor = ((id (*)(id, SEL))objc_msgSend)(vendorClass, sharedSel);
     if (!vendor) {
-        FileLog(@"[LEDBreathe][SAFE] sharedVendor trả về nil -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] sharedCaptureDeviceVendor trả về nil -> dừng an toàn.");
         return nil;
     }
 
-    SEL deviceForTypeSel = @selector(deviceForType:);
-    if (![vendor respondsToSelector:deviceForTypeSel]) {
-        FileLog(@"[LEDBreathe][SAFE] vendor không có method deviceForType: -> dừng an toàn.");
+    SEL streamSel = NSSelectorFromString(@"copyStreamForFlashlightWithPosition:deviceType:forDevice:error:");
+    if (![vendor respondsToSelector:streamSel]) {
+        FileLog(@"[LEDBreathe][SAFE] vendor không có method copyStreamForFlashlightWithPosition:... -> dừng an toàn.");
         return nil;
     }
 
-    id device = ((id (*)(id, SEL, NSString *))objc_msgSend)(vendor, deviceForTypeSel, @"Torch");
-    if (!device) {
-        FileLog(@"[LEDBreathe][SAFE] deviceForType:Torch trả về nil -> dừng an toàn.");
+    NSError *err = nil;
+    id stream = ((id (*)(id, SEL, NSInteger, NSInteger, id, NSError **))objc_msgSend)
+        (vendor, streamSel, 0, 0, nil, &err);
+
+    if (!stream) {
+        FileLog([NSString stringWithFormat:@"[LEDBreathe][SAFE] copyStreamForFlashlightWithPosition trả về nil, error: %@ -> dừng an toàn.", err]);
         return nil;
     }
 
-    SEL setParamsSel = NSSelectorFromString(@"setTorchManualParameters:white2:amber1:amber2:");
-    if (![device respondsToSelector:setParamsSel]) {
-        FileLog(@"[LEDBreathe][SAFE] device không có method setTorchManualParameters:white2:amber1:amber2: -> dừng an toàn.");
-        return nil;
-    }
+    NSString *streamDump = DumpClassMethods([stream class]);
+    FileLog([NSString stringWithFormat:@"[LEDBreathe][DUMP] Stream class (%@):\n%@", NSStringFromClass([stream class]), streamDump]);
 
-    gTorchDevice = device;
-    gApiVerifiedSafe = YES;
-    FileLog(@"[LEDBreathe][SAFE] Mọi kiểm tra an toàn ĐỀU QUA.");
+    gTorchDevice = stream;
+    gApiVerifiedSafe = NO;
     return gTorchDevice;
 }
 
@@ -296,7 +276,7 @@ static void SettingsChangedCallback(CFNotificationCenterRef center,
         return;
     }
 
-    FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản debug).");
+    FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản an toàn).");
 
     DebugDumpVendorClass();
 
