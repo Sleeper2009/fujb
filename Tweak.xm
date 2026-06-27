@@ -1,15 +1,14 @@
 // LEDBreathe — tweak cho TrollLEDs / Quad-LED iPhone (rootless, Dopamine)
 //
-// PHIÊN BẢN AN TOÀN: mọi lệnh gọi tới API private đều được kiểm tra kỹ
-// bằng respondsToSelector: trước khi gọi. Nếu bất kỳ bước nào không khớp
-// (class không tồn tại, method không có...), tweak sẽ CHỈ ghi log và
-// TỰ TẮT, không gọi liều để tránh làm crash mediaserverd.
+// PHIÊN BẢN DEBUG: hiện popup trực tiếp trên màn hình mỗi khi có log,
+// để không cần vào Terminal đọc file.
 
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
 #import <math.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <CoreFoundation/CFUserNotification.h>
 
 #define PHYSICAL_LED_IS_QUAD true
 #define BRIGHTNESS_SCALE 0.55
@@ -25,7 +24,27 @@ static id gTorchDevice = nil;
 static BOOL gApiVerifiedSafe = NO;
 static CFAbsoluteTime gStartTime = 0;
 
-#define LOG_FILE_PATH "/var/mobile/Documents/ledbreathe_log.txt"
+#define LOG_FILE_PATH "/tmp/ledbreathe_log.txt"
+
+static void ShowAlert(NSString *title, NSString *message) {
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+
+    CFDictionarySetValue(dict, kCFUserNotificationAlertHeaderKey, (CFStringRef)title);
+    CFDictionarySetValue(dict, kCFUserNotificationAlertMessageKey, (CFStringRef)message);
+    CFDictionarySetValue(dict, kCFUserNotificationDefaultButtonTitleKey, (CFStringRef)@"OK");
+
+    SInt32 error = 0;
+    CFUserNotificationRef notif = CFUserNotificationCreate(
+        kCFAllocatorDefault, 10.0, kCFUserNotificationPlainAlertLevel, &error, dict);
+
+    CFRelease(dict);
+    if (notif) {
+        CFRelease(notif);
+    }
+}
 
 static void FileLog(NSString *message) {
     NSLog(@"%@", message);
@@ -45,6 +64,8 @@ static void FileLog(NSString *message) {
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
+
+    ShowAlert(@"LEDBreathe Log", message);
 }
 
 static id SafeGetTorchDevice(void) {
@@ -241,7 +262,7 @@ static void SettingsChangedCallback(CFNotificationCenterRef center,
         return;
     }
 
-    FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản an toàn).");
+    FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản debug).");
 
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetDarwinNotifyCenter(),
