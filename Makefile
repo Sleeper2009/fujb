@@ -10,7 +10,7 @@ TWEAK_NAME = LEDBreathe
 
 LEDBreathe_FILES = Tweak.xm
 LEDBreathe_CFLAGS = -fobjc-arc
-LEDBreathe_FRAMEWORKS = Foundation
+LEDBreathe_FRAMEWORKS = Foundation CoreFoundation
 LEDBreathe_PRIVATE_FRAMEWORKS = AVFoundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk
