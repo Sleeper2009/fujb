@@ -1,7 +1,7 @@
 // LEDBreathe — tweak cho TrollLEDs / Quad-LED iPhone (rootless, Dopamine)
 //
-// PHIÊN BẢN DEBUG: hiện popup trực tiếp trên màn hình mỗi khi có log,
-// để không cần vào Terminal đọc file.
+// PHIÊN BẢN DEBUG: dump toàn bộ method thật của class private để tìm
+// đúng tên method, vì "sharedVendor" mình đoán ban đầu không đúng.
 
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
@@ -66,6 +66,40 @@ static void FileLog(NSString *message) {
     }
 
     ShowAlert(@"LEDBreathe Log", message);
+}
+
+static NSString *DumpClassMethods(Class cls) {
+    NSMutableString *result = [NSMutableString string];
+
+    unsigned int classMethodCount = 0;
+    Method *classMethods = class_copyMethodList(object_getClass(cls), &classMethodCount);
+    [result appendFormat:@"+ (%u methods):\n", classMethodCount];
+    for (unsigned int i = 0; i < classMethodCount && i < 30; i++) {
+        SEL sel = method_getName(classMethods[i]);
+        [result appendFormat:@"  +%s\n", sel_getName(sel)];
+    }
+    if (classMethods) free(classMethods);
+
+    unsigned int instMethodCount = 0;
+    Method *instMethods = class_copyMethodList(cls, &instMethodCount);
+    [result appendFormat:@"- (%u methods):\n", instMethodCount];
+    for (unsigned int i = 0; i < instMethodCount && i < 30; i++) {
+        SEL sel = method_getName(instMethods[i]);
+        [result appendFormat:@"  -%s\n", sel_getName(sel)];
+    }
+    if (instMethods) free(instMethods);
+
+    return result;
+}
+
+static void DebugDumpVendorClass(void) {
+    Class vendorClass = NSClassFromString(@"BWFigCaptureDeviceVendor");
+    if (!vendorClass) {
+        FileLog(@"[LEDBreathe][DUMP] Không tìm thấy class BWFigCaptureDeviceVendor");
+        return;
+    }
+    NSString *dump = DumpClassMethods(vendorClass);
+    FileLog([NSString stringWithFormat:@"[LEDBreathe][DUMP] BWFigCaptureDeviceVendor:\n%@", dump]);
 }
 
 static id SafeGetTorchDevice(void) {
@@ -263,6 +297,8 @@ static void SettingsChangedCallback(CFNotificationCenterRef center,
     }
 
     FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản debug).");
+
+    DebugDumpVendorClass();
 
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetDarwinNotifyCenter(),
