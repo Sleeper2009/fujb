@@ -25,47 +25,69 @@ static id gTorchDevice = nil;
 static BOOL gApiVerifiedSafe = NO;
 static CFAbsoluteTime gStartTime = 0;
 
+#define LOG_FILE_PATH "/var/mobile/Documents/ledbreathe_log.txt"
+
+static void FileLog(NSString *message) {
+    NSLog(@"%@", message);
+
+    NSString *line = [NSString stringWithFormat:@"%@ | %@\n",
+                       [NSDate date], message];
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@LOG_FILE_PATH];
+    if (!fh) {
+        [[NSFileManager defaultManager] createFileAtPath:@LOG_FILE_PATH
+                                                  contents:nil
+                                                attributes:nil];
+        fh = [NSFileHandle fileHandleForWritingAtPath:@LOG_FILE_PATH];
+    }
+    if (fh) {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
+}
+
 static id SafeGetTorchDevice(void) {
     if (gTorchDevice) return gTorchDevice;
 
     Class vendorClass = NSClassFromString(@"BWFigCaptureDeviceVendor");
     if (!vendorClass) {
-        NSLog(@"[LEDBreathe][SAFE] Class BWFigCaptureDeviceVendor không tồn tại -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] Class BWFigCaptureDeviceVendor không tồn tại -> dừng an toàn.");
         return nil;
     }
 
     if (![vendorClass respondsToSelector:@selector(sharedVendor)]) {
-        NSLog(@"[LEDBreathe][SAFE] vendorClass không có method sharedVendor -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] vendorClass không có method sharedVendor -> dừng an toàn.");
         return nil;
     }
 
     id vendor = ((id (*)(id, SEL))objc_msgSend)(vendorClass, @selector(sharedVendor));
     if (!vendor) {
-        NSLog(@"[LEDBreathe][SAFE] sharedVendor trả về nil -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] sharedVendor trả về nil -> dừng an toàn.");
         return nil;
     }
 
     SEL deviceForTypeSel = @selector(deviceForType:);
     if (![vendor respondsToSelector:deviceForTypeSel]) {
-        NSLog(@"[LEDBreathe][SAFE] vendor không có method deviceForType: -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] vendor không có method deviceForType: -> dừng an toàn.");
         return nil;
     }
 
     id device = ((id (*)(id, SEL, NSString *))objc_msgSend)(vendor, deviceForTypeSel, @"Torch");
     if (!device) {
-        NSLog(@"[LEDBreathe][SAFE] deviceForType:Torch trả về nil -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] deviceForType:Torch trả về nil -> dừng an toàn.");
         return nil;
     }
 
     SEL setParamsSel = NSSelectorFromString(@"setTorchManualParameters:white2:amber1:amber2:");
     if (![device respondsToSelector:setParamsSel]) {
-        NSLog(@"[LEDBreathe][SAFE] device không có method setTorchManualParameters:white2:amber1:amber2: -> dừng an toàn.");
+        FileLog(@"[LEDBreathe][SAFE] device không có method setTorchManualParameters:white2:amber1:amber2: -> dừng an toàn.");
         return nil;
     }
 
     gTorchDevice = device;
     gApiVerifiedSafe = YES;
-    NSLog(@"[LEDBreathe][SAFE] Mọi kiểm tra an toàn ĐỀU QUA.");
+    FileLog(@"[LEDBreathe][SAFE] Mọi kiểm tra an toàn ĐỀU QUA.");
     return gTorchDevice;
 }
 
@@ -79,7 +101,7 @@ static BOOL SafeSetTorchParams(id device, float w1, float w2, float a1, float a2
             (BOOL (*)(id, SEL, float, float, float, float))objc_msgSend;
         return func(device, sel, w1, w2, a1, a2);
     } @catch (NSException *e) {
-        NSLog(@"[LEDBreathe][SAFE] Exception khi gọi setTorchManualParameters: %@ -> tự tắt.", e);
+        FileLog([NSString stringWithFormat:@"[LEDBreathe][SAFE] Exception khi gọi setTorchManualParameters: %@ -> tự tắt.", e]);
         gApiVerifiedSafe = NO;
         return NO;
     }
@@ -134,18 +156,18 @@ static void StopBreathing(void) {
     if (gApiVerifiedSafe && gTorchDevice) {
         SafeSetTorchParams(gTorchDevice, 0, 0, 0, 0);
     }
-    NSLog(@"[LEDBreathe] Đã dừng animation và tắt LED.");
+    FileLog(@"[LEDBreathe] Đã dừng animation và tắt LED.");
 }
 
 static void StartBreathing(void) {
     if (gBreatheTimer) {
-        NSLog(@"[LEDBreathe] Animation đã đang chạy, bỏ qua.");
+        FileLog(@"[LEDBreathe] Animation đã đang chạy, bỏ qua.");
         return;
     }
 
     id device = SafeGetTorchDevice();
     if (!device || !gApiVerifiedSafe) {
-        NSLog(@"[LEDBreathe] Kiểm tra an toàn KHÔNG qua -> không khởi động animation.");
+        FileLog(@"[LEDBreathe] Kiểm tra an toàn KHÔNG qua -> không khởi động animation.");
         return;
     }
 
@@ -162,7 +184,7 @@ static void StartBreathing(void) {
 #if AUTO_OFF_SECONDS > 0
     gAutoOffTimer = [NSTimer scheduledTimerWithTimeInterval:AUTO_OFF_SECONDS
                                                       target:[NSBlockOperation blockOperationWithBlock:^{
-                                                          NSLog(@"[LEDBreathe] Hết thời gian an toàn -> tự tắt.");
+                                                          FileLog(@"[LEDBreathe] Hết thời gian an toàn -> tự tắt.");
                                                           StopBreathing();
                                                       }]
                                                     selector:@selector(main)
@@ -170,7 +192,7 @@ static void StartBreathing(void) {
                                                      repeats:NO];
 #endif
 
-    NSLog(@"[LEDBreathe] Bắt đầu animation breathing (đã qua kiểm tra an toàn).");
+    FileLog(@"[LEDBreathe] Bắt đầu animation breathing (đã qua kiểm tra an toàn).");
 }
 
 static void DarwinNotifyCallback(CFNotificationCenterRef center,
@@ -197,10 +219,10 @@ static void ApplySettingsState(void) {
     );
 
     if (keyExists && enabled) {
-        NSLog(@"[LEDBreathe] Toggle Settings = ON -> thử bắt đầu animation.");
+        FileLog(@"[LEDBreathe] Toggle Settings = ON -> thử bắt đầu animation.");
         StartBreathing();
     } else {
-        NSLog(@"[LEDBreathe] Toggle Settings = OFF -> dừng animation.");
+        FileLog(@"[LEDBreathe] Toggle Settings = OFF -> dừng animation.");
         StopBreathing();
     }
 }
@@ -219,7 +241,7 @@ static void SettingsChangedCallback(CFNotificationCenterRef center,
         return;
     }
 
-    NSLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản an toàn).");
+    FileLog(@"[LEDBreathe] Tweak loaded trong mediaserverd (bản an toàn).");
 
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetDarwinNotifyCenter(),
