@@ -26,7 +26,7 @@ static id gTorchDevice = nil;
 static BOOL gApiVerifiedSafe = NO;
 static CFAbsoluteTime gStartTime = 0;
 
-#define LOG_FILE_PATH "/tmp/ledbreathe_log.txt"
+#define LOG_FILE_PATH "/var/mobile/Documents/ledbreathe_log.txt"
 
 static void FileLog(NSString *message) {
     NSLog(@"%@", message);
@@ -54,7 +54,7 @@ static NSString *DumpClassMethods(Class cls) {
     unsigned int classMethodCount = 0;
     Method *classMethods = class_copyMethodList(object_getClass(cls), &classMethodCount);
     [result appendFormat:@"+ (%u methods):\n", classMethodCount];
-    for (unsigned int i = 0; i < classMethodCount && i < 30; i++) {
+    for (unsigned int i = 0; i < classMethodCount && i < 40; i++) {
         SEL sel = method_getName(classMethods[i]);
         [result appendFormat:@"  +%s\n", sel_getName(sel)];
     }
@@ -63,7 +63,7 @@ static NSString *DumpClassMethods(Class cls) {
     unsigned int instMethodCount = 0;
     Method *instMethods = class_copyMethodList(cls, &instMethodCount);
     [result appendFormat:@"- (%u methods):\n", instMethodCount];
-    for (unsigned int i = 0; i < instMethodCount && i < 30; i++) {
+    for (unsigned int i = 0; i < instMethodCount && i < 40; i++) {
         SEL sel = method_getName(instMethods[i]);
         [result appendFormat:@"  -%s\n", sel_getName(sel)];
     }
