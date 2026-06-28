@@ -15,7 +15,7 @@
 #define UPDATE_FPS 30.0
 #define AUTO_OFF_SECONDS (15 * 60)
 
-#define LOG_FILE_PATH "/var/containers/Bundle/Application/.jbroot-42267504D25BF468/var/mobile/Documents/ledbreathe_log.txt"
+#define LOG_FILE_PATH "/var/mobile/Documents/ledbreathe_log.txt"
 
 static void FileLog(NSString *message) {
     NSLog(@"%@", message);
@@ -196,8 +196,17 @@ static void SetTorchParams(float w1, float w2, float a1, float a2) {
         }
     } @catch (NSException *e) {
         FileLog([NSString stringWithFormat:@"[LEDBreathe] Exception khi setProperty (dictionary): %@", e]);
-    }
-}
+
+        @try {
+            float values[4] = { w1, w2, a1, a2 };
+            NSData *data = [NSData dataWithBytes:values length:sizeof(values)];
+            SEL setPropSel = NSSelectorFromString(@"setProperty:value:");
+            FileLog(@"[LEDBreathe] Thử lại setProperty với NSData (dự phòng).");
+            ((void (*)(id, SEL, CFStringRef, id))objc_msgSend)
+                (gStream, setPropSel, CFSTR("TorchManualParameters"), data);
+        } @catch (NSException *e2) {
+            FileLog([NSString stringWithFormat:@"[LEDBreathe] Exception khi setProperty (NSData dự phòng): %@", e2]);
+        }
     }
 }
 
