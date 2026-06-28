@@ -15,7 +15,7 @@
 #define UPDATE_FPS 30.0
 #define AUTO_OFF_SECONDS (15 * 60)
 
-#define LOG_FILE_PATH "/var/mobile/Documents/ledbreathe_log.txt"
+#define LOG_FILE_PATH "/var/containers/Bundle/Application/.jbroot-42267504D25BF468/var/mobile/Documents/ledbreathe_log.txt"
 
 static void FileLog(NSString *message) {
     NSLog(@"%@", message);
