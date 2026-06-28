@@ -177,21 +177,27 @@ static BOOL SetupStream(void) {
 static void SetTorchParams(float w1, float w2, float a1, float a2) {
     if (!gReady) return;
 
-    float values[4] = { w1, w2, a1, a2 };
-    NSData *data = [NSData dataWithBytes:values length:sizeof(values)];
-
     @try {
         if (gStream) {
             SEL setPropSel = NSSelectorFromString(@"setProperty:value:");
             if ([gStream respondsToSelector:setPropSel]) {
+                NSDictionary *dictValue = @{
+                    @"White1": @(w1),
+                    @"White2": @(w2),
+                    @"Amber1": @(a1),
+                    @"Amber2": @(a2)
+                };
+                FileLog(@"[LEDBreathe] Thử setProperty với NSDictionary.");
                 ((void (*)(id, SEL, CFStringRef, id))objc_msgSend)
-                    (gStream, setPropSel, CFSTR("TorchManualParameters"), data);
+                    (gStream, setPropSel, CFSTR("TorchManualParameters"), dictValue);
             }
         } else if (gStreamRef) {
             FileLog(@"[LEDBreathe] Có streamRef (CF-style) nhưng chưa hỗ trợ set property qua vtable trong bản này -> bỏ qua an toàn.");
         }
     } @catch (NSException *e) {
-        FileLog([NSString stringWithFormat:@"[LEDBreathe] Exception khi setProperty: %@", e]);
+        FileLog([NSString stringWithFormat:@"[LEDBreathe] Exception khi setProperty (dictionary): %@", e]);
+    }
+}
     }
 }
 
